@@ -135,7 +135,6 @@ async def create(ctx, nombre_joueurs: int):
         embed = view.generate_embed()
         result_msg = await ctx.send(embed=embed, view=view)
         view.message = result_msg
-        view.update_task.start()
 
     await ctx.send("🔧 Création du match...")
     await ctx.send("🧩 Configuration du match :", view=MatchConfig())
@@ -146,28 +145,27 @@ class ResultView(View):
         self.team1 = team1
         self.team2 = team2
         self.gain = gain
-        self.votes = {"team1": set(), "team2": set()}
-        self.start_time = datetime.utcnow()
+        self.votes = {"team1": {}, "team2": {}}
+        self.timer_started = False
+        self.start_time = None
         self.message = None
+        self.update_task.start()
 
     def generate_embed(self):
-        remaining = 180 - int((datetime.utcnow() - self.start_time).total_seconds())
-        def names(votes, team):
-            return ", ".join(m.name for m in team if m.id in votes) or "Aucun"
-        embed = discord.Embed(
-            title="📊 Statut des votes",
-            description=(
-                f"⏳ Temps restant : {remaining}s\n\n"
-                f"✅ **Équipe 1** a voté : {names(self.votes['team1'], self.team1)}\n"
-                f"✅ **Équipe 2** a voté : {names(self.votes['team2'], self.team2)}"
-            ),
-            color=discord.Color.orange()
-        )
+        remaining = max(0, 180 - int((datetime.utcnow() - self.start_time).total_seconds())) if self.timer_started else "Pas commencé"
+
+        def format_votes(team, votes):
+            return "\n".join(f"{'✅' if member.id in votes else '❌'} {member.name}" for member in team)
+
+        embed = discord.Embed(title="📊 Statut des votes", color=discord.Color.orange())
+        embed.add_field(name="⏳ Temps restant", value=f"{remaining}s", inline=False)
+        embed.add_field(name="Équipe 1", value=format_votes(self.team1, self.votes["team1"]), inline=True)
+        embed.add_field(name="Équipe 2", value=format_votes(self.team2, self.votes["team2"]), inline=True)
         return embed
 
     @tasks.loop(seconds=5)
     async def update_task(self):
-        if self.message:
+        if self.message and self.timer_started:
             if (datetime.utcnow() - self.start_time).total_seconds() >= 180:
                 await self.check_result()
                 self.update_task.cancel()
@@ -175,36 +173,46 @@ class ResultView(View):
                 await self.message.edit(embed=self.generate_embed())
 
     async def check_result(self):
-        if len(self.votes["team1"]) == len(self.team1) and len(self.votes["team2"]) == len(self.team2):
-            await self.message.channel.send("✅ Résultat validé. GG à tous !")
-            for m in self.team1:
-                if m.id in self.votes["team1"]:
-                    await m.send(f"✅ Vous avez gagné {self.gain}€")
-            for m in self.team2:
-                if m.id in self.votes["team2"]:
-                    await m.send("❌ Vous avez perdu votre mise.")
-        else:
-            await self.message.channel.send(
-                "⚠️ Conflit détecté. Veuillez déposer une preuve (vidéo/lien Streamable...) dans ce salon dans les 3 minutes."
-            )
+        await self.message.channel.send(
+            "⚠️ Conflit détecté. Veuillez déposer une preuve (vidéo/lien Streamable...) dans ce salon dans les 3 minutes."
+        )
 
     @discord.ui.button(label="Victoire", style=discord.ButtonStyle.success)
     async def victoire(self, interaction: discord.Interaction, button: Button):
+        if not self.timer_started:
+            self.start_time = datetime.utcnow()
+            self.timer_started = True
+
         if interaction.user in self.team1:
-            self.votes["team1"].add(interaction.user.id)
+            self.votes["team1"][interaction.user.id] = "win"
         elif interaction.user in self.team2:
-            self.votes["team2"].add(interaction.user.id)
+            self.votes["team2"][interaction.user.id] = "win"
         await interaction.response.send_message("🟢 Vote enregistré.", ephemeral=True)
         await self.message.edit(embed=self.generate_embed())
 
     @discord.ui.button(label="Défaite", style=discord.ButtonStyle.danger)
     async def defaite(self, interaction: discord.Interaction, button: Button):
+        if not self.timer_started:
+            self.start_time = datetime.utcnow()
+            self.timer_started = True
+
         if interaction.user in self.team1:
-            self.votes["team2"].add(interaction.user.id)
+            self.votes["team1"][interaction.user.id] = "lose"
         elif interaction.user in self.team2:
-            self.votes["team1"].add(interaction.user.id)
+            self.votes["team2"][interaction.user.id] = "lose"
+
         await interaction.response.send_message("🔴 Vote enregistré.", ephemeral=True)
         await self.message.edit(embed=self.generate_embed())
+
+        # Check for instant resolution
+        team1_votes = list(self.votes["team1"].values())
+        team2_votes = list(self.votes["team2"].values())
+        if "lose" in team1_votes:
+            await self.message.channel.send("🏆 Équipe 2 gagne par déclaration de défaite !")
+            self.update_task.cancel()
+        elif "lose" in team2_votes:
+            await self.message.channel.send("🏆 Équipe 1 gagne par déclaration de défaite !")
+            self.update_task.cancel()
 
 @bot.event
 async def on_message(message):
