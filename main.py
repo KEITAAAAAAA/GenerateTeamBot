@@ -137,12 +137,14 @@ async def send_mode_selection(interaction, match):
     for label in ["Realistic", "Zone Wars", "Boxfight"]:
         view.add_item(Button(label=label, style=discord.ButtonStyle.primary, custom_id=f"mode_{label.lower()}"))
     view.add_item(Button(label="Autre", style=discord.ButtonStyle.secondary, custom_id="mode_custom"))
+    await interaction.response.defer()
     await interaction.followup.send("Choisissez un mode de jeu :", view=view)
 
 async def send_format_selection(interaction, match):
     view = View()
     view.add_item(Button(label="First to 3 +2", style=discord.ButtonStyle.success, custom_id="format_3"))
     view.add_item(Button(label="First to 5 +2", style=discord.ButtonStyle.success, custom_id="format_5"))
+    await interaction.response.defer()
     await interaction.followup.send("Choisissez un format :", view=view)
 
 async def send_result_buttons(ctx, match):
