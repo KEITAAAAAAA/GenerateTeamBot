@@ -17,7 +17,7 @@ VOCAL_TEAMS = {
 
 MATCH_LOG_CHANNEL_ID = 123456789012345678  # Remplacer
 ADMIN_ID = 943177409933488139
-PAYPAL_LINK = "https://paypal.me/keitaaaonytb"
+PAYPAL_LINK = "https://paypal.me/tonlien"
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
@@ -131,15 +131,11 @@ async def create(ctx, nombre_joueurs: int):
             await m.move_to(ch2)
             await m.send(f"➡️ Tu joues en **{match_data['mode']}**, mise **{match_data['mise']}€**, format **{match_data['format']}**. Envoie ta mise ici : {PAYPAL_LINK}")
 
-        result_msg = await ctx.send(
-            embed=discord.Embed(
-                title="🎮 Fin du match - Résultats",
-                description=f"Équipe 1 : {', '.join(m.name for m in team1)}\nÉquipe 2 : {', '.join(m.name for m in team2)}",
-                color=discord.Color.blue()
-            ),
-            view=ResultView(team1, team2, match_data["mise"] * len(team1))
-        )
-        result_msg.view.message = result_msg
+        view = ResultView(team1, team2, match_data["mise"] * len(team1))
+        embed = view.generate_embed()
+        result_msg = await ctx.send(embed=embed, view=view)
+        view.message = result_msg
+        view.update_task.start()
 
     await ctx.send("🔧 Création du match...")
     await ctx.send("🧩 Configuration du match :", view=MatchConfig())
@@ -153,17 +149,30 @@ class ResultView(View):
         self.votes = {"team1": set(), "team2": set()}
         self.start_time = datetime.utcnow()
         self.message = None
-        self.update_task.start()
+
+    def generate_embed(self):
+        remaining = 180 - int((datetime.utcnow() - self.start_time).total_seconds())
+        def names(votes, team):
+            return ", ".join(m.name for m in team if m.id in votes) or "Aucun"
+        embed = discord.Embed(
+            title="📊 Statut des votes",
+            description=(
+                f"⏳ Temps restant : {remaining}s\n\n"
+                f"✅ **Équipe 1** a voté : {names(self.votes['team1'], self.team1)}\n"
+                f"✅ **Équipe 2** a voté : {names(self.votes['team2'], self.team2)}"
+            ),
+            color=discord.Color.orange()
+        )
+        return embed
 
     @tasks.loop(seconds=5)
     async def update_task(self):
         if self.message:
-            remaining = 180 - int((datetime.utcnow() - self.start_time).total_seconds())
-            if remaining <= 0:
+            if (datetime.utcnow() - self.start_time).total_seconds() >= 180:
                 await self.check_result()
                 self.update_task.cancel()
             else:
-                await self.message.edit(content=f"⏳ Temps restant pour valider le résultat : {remaining}s")
+                await self.message.edit(embed=self.generate_embed())
 
     async def check_result(self):
         if len(self.votes["team1"]) == len(self.team1) and len(self.votes["team2"]) == len(self.team2):
@@ -186,6 +195,7 @@ class ResultView(View):
         elif interaction.user in self.team2:
             self.votes["team2"].add(interaction.user.id)
         await interaction.response.send_message("🟢 Vote enregistré.", ephemeral=True)
+        await self.message.edit(embed=self.generate_embed())
 
     @discord.ui.button(label="Défaite", style=discord.ButtonStyle.danger)
     async def defaite(self, interaction: discord.Interaction, button: Button):
@@ -194,6 +204,7 @@ class ResultView(View):
         elif interaction.user in self.team2:
             self.votes["team1"].add(interaction.user.id)
         await interaction.response.send_message("🔴 Vote enregistré.", ephemeral=True)
+        await self.message.edit(embed=self.generate_embed())
 
 @bot.event
 async def on_message(message):
