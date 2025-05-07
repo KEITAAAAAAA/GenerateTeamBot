@@ -17,7 +17,7 @@ VOCAL_TEAMS = {
 
 MATCH_LOG_CHANNEL_ID = 123456789012345678  # Remplacer
 ADMIN_ID = 943177409933488139
-PAYPAL_LINK = "https://paypal.me/tonlien"
+PAYPAL_LINK = "https://paypal.me/keitaaaonytb"
 
 @bot.command()
 @commands.has_permissions(manage_messages=True)
