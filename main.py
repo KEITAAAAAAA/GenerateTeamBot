@@ -6,14 +6,12 @@ import os
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Dictionnaire des vocaux pour split déjà existant
 VOCAL_TEAMS = {
-    4: [1369710510672711751, 1369710519543402578],  # 2v2
-    6: [1369710449523822602, 1369710438769491979],  # 3v3
-    8: [1369710384944250950, 1369710409774272623],  # 4v4
+    4: [1369710510672711751, 1369710519543402578],
+    6: [1369710449523822602, 1369710438769491979],
+    8: [1369710384944250950, 1369710409774272623],
 }
 
-# Stockage temporaire des matchs
 matches = {}
 
 class Match:
@@ -74,7 +72,6 @@ async def delete(ctx, amount: int):
     confirmation = await ctx.send(f"✅ {amount} messages supprimés.")
     await confirmation.delete(delay=3)
 
-# Création de match
 from discord.ui import View, Button, Modal, TextInput
 
 class AmountView(View):
@@ -137,14 +134,12 @@ async def send_mode_selection(interaction, match):
     for label in ["Realistic", "Zone Wars", "Boxfight"]:
         view.add_item(Button(label=label, style=discord.ButtonStyle.primary, custom_id=f"mode_{label.lower()}"))
     view.add_item(Button(label="Autre", style=discord.ButtonStyle.secondary, custom_id="mode_custom"))
-    await interaction.response.defer()
     await interaction.followup.send("Choisissez un mode de jeu :", view=view)
 
 async def send_format_selection(interaction, match):
     view = View()
     view.add_item(Button(label="First to 3 +2", style=discord.ButtonStyle.success, custom_id="format_3"))
     view.add_item(Button(label="First to 5 +2", style=discord.ButtonStyle.success, custom_id="format_5"))
-    await interaction.response.defer()
     await interaction.followup.send("Choisissez un format :", view=view)
 
 async def send_result_buttons(ctx, match):
@@ -157,7 +152,8 @@ async def send_result_buttons(ctx, match):
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
-    await bot.process_application_commands(interaction)
+    if interaction.type != discord.InteractionType.component:
+        return
 
     match = matches.get(interaction.channel.id)
     if not match:
