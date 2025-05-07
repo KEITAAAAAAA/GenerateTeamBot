@@ -1,30 +1,32 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 from discord.ui import View, Button, Select
 import random
 import asyncio
 import os
+from datetime import datetime, timedelta
 
 intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# IDs des salons vocaux que tu as fournis
+# Identifiants des salons vocaux pour le split automatique
 VOCAL_TEAMS = {
     4: [1369710510672711751, 1369710519543402578],
     6: [1369710449523822602, 1369710438769491979],
     8: [1369710384944250950, 1369710409774272623],
 }
 
-# ID de l'admin à qui envoyer les DM
+# Salon textuel pour les preuves de litiges
+MATCH_LOG_CHANNEL_ID = 123456789012345678  # À remplacer par l'ID de ton salon textuel
+
+# ID de l'admin à notifier (à remplacer)
 ADMIN_ID = 943177409933488139
 
-matches = {}  # Pour stocker les infos de chaque match en cours
+# Lien PayPal
+PAYPAL_LINK = "https://paypal.me/tonlien"
 
-@bot.event
-async def on_ready():
-    print(f"✅ Connecté en tant que {bot.user}")
-
-# Commande DELETE conservée
+# Commande de suppression
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def delete(ctx, amount: int):
@@ -35,183 +37,186 @@ async def delete(ctx, amount: int):
     confirmation = await ctx.send(f"✅ {amount} messages supprimés.")
     await confirmation.delete(delay=3)
 
-class MatchSetup(View):
-    def __init__(self, ctx, players):
-        super().__init__(timeout=None)
-        self.ctx = ctx
-        self.players = players
-        self.match_id = f"{ctx.channel.id}-{random.randint(1000, 9999)}"
-        self.match_data = {"players": players, "ctx": ctx}
-        matches[self.match_id] = self.match_data
+# Commande principale de création de match
+@bot.command()
+async def create(ctx, nombre_joueurs: int):
+    if nombre_joueurs not in VOCAL_TEAMS:
+        await ctx.send("❌ Tu dois entrer 4, 6 ou 8 comme nombre de joueurs.")
+        return
 
-        self.money = None
-        self.mode = None
-        self.first_to = None
+    voice_channel = ctx.author.voice.channel if ctx.author.voice else None
+    if not voice_channel:
+        await ctx.send("❌ Tu dois être dans un salon vocal.")
+        return
 
-        self.money_select = Select(
-            placeholder="💰 Choisis ta mise...",
+    members = [member for member in voice_channel.members if not member.bot]
+    if len(members) != nombre_joueurs:
+        await ctx.send(f"❌ Il y a {len(members)} membres dans le vocal au lieu de {nombre_joueurs}.")
+        return
+
+    class MatchConfig(View):
+        def __init__(self):
+            super().__init__(timeout=None)
+            self.match_data = {}
+            self.match_data["players"] = members
+            self.match_data["voice_channel"] = voice_channel
+
+        @discord.ui.select(
+            placeholder="Choisis une mise",
+            min_values=1,
+            max_values=1,
             options=[
-                discord.SelectOption(label="1€", value="1"),
-                discord.SelectOption(label="2€", value="2"),
-                discord.SelectOption(label="5€", value="5"),
-                discord.SelectOption(label="10€", value="10"),
-                discord.SelectOption(label="Autre", value="custom")
+                discord.SelectOption(label="1€"),
+                discord.SelectOption(label="2€"),
+                discord.SelectOption(label="5€"),
+                discord.SelectOption(label="10€"),
+                discord.SelectOption(label="Autre")
             ]
         )
-        self.money_select.callback = self.money_callback
+        async def select_mise(self, interaction: discord.Interaction, select: discord.ui.Select):
+            if select.values[0] == "Autre":
+                await interaction.response.send_message("Entre la mise personnalisée en euros (supérieure à 1€) :", ephemeral=True)
 
-        self.mode_select = Select(
-            placeholder="🎮 Choisis le mode de jeu...",
+                def check(msg):
+                    return msg.author == interaction.user and msg.channel == interaction.channel
+
+                msg = await bot.wait_for("message", check=check)
+                try:
+                    self.match_data["mise"] = float(msg.content)
+                except ValueError:
+                    await interaction.followup.send("❌ Entrée invalide.", ephemeral=True)
+                    return
+            else:
+                self.match_data["mise"] = float(select.values[0].replace("€", ""))
+            await interaction.followup.send(f"💶 Mise enregistrée : {self.match_data['mise']}€", ephemeral=True)
+
+        @discord.ui.select(
+            placeholder="Choisis le mode de jeu",
+            min_values=1,
+            max_values=1,
             options=[
-                discord.SelectOption(label="Realistic", value="Realistic"),
-                discord.SelectOption(label="Zone Wars", value="Zone Wars"),
-                discord.SelectOption(label="Boxfight", value="Boxfight"),
-                discord.SelectOption(label="Personnalisé", value="custom")
+                discord.SelectOption(label="Realistic"),
+                discord.SelectOption(label="Zone Wars"),
+                discord.SelectOption(label="Box Fight"),
+                discord.SelectOption(label="Autre")
             ]
         )
-        self.mode_select.callback = self.mode_callback
+        async def select_mode(self, interaction: discord.Interaction, select: discord.ui.Select):
+            if select.values[0] == "Autre":
+                await interaction.response.send_message("Entre le mode personnalisé :", ephemeral=True)
+                def check(msg):
+                    return msg.author == interaction.user and msg.channel == interaction.channel
+                msg = await bot.wait_for("message", check=check)
+                self.match_data["mode"] = msg.content
+            else:
+                self.match_data["mode"] = select.values[0]
+            await interaction.followup.send(f"🎮 Mode enregistré : {self.match_data['mode']}", ephemeral=True)
 
-        self.first_to_btn_3 = Button(label="First to 3 +2", style=discord.ButtonStyle.primary)
-        self.first_to_btn_5 = Button(label="First to 5 +2", style=discord.ButtonStyle.primary)
-        self.first_to_btn_3.callback = self.set_first_to_3
-        self.first_to_btn_5.callback = self.set_first_to_5
+        @discord.ui.select(
+            placeholder="Choisis le format du match",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(label="First to 3 (+2)"),
+                discord.SelectOption(label="First to 5 (+2)")
+            ]
+        )
+        async def select_format(self, interaction: discord.Interaction, select: discord.ui.Select):
+            self.match_data["format"] = select.values[0]
+            await interaction.followup.send(f"🎯 Format enregistré : {self.match_data['format']}", ephemeral=True)
+            await finalize_match(self.match_data)
 
-        self.add_item(self.money_select)
-        self.add_item(self.mode_select)
-        self.add_item(self.first_to_btn_3)
-        self.add_item(self.first_to_btn_5)
+    async def finalize_match(match_data):
+        players = match_data["players"]
+        random.shuffle(players)
+        team1 = players[:len(players)//2]
+        team2 = players[len(players)//2:]
 
-    async def money_callback(self, interaction):
-        if self.money_select.values[0] == "custom":
-            await interaction.response.send_message("💸 Envoie ta mise personnalisée en euros (ex: 3.5)", ephemeral=True)
+        ch1 = ctx.guild.get_channel(VOCAL_TEAMS[nombre_joueurs][0])
+        ch2 = ctx.guild.get_channel(VOCAL_TEAMS[nombre_joueurs][1])
 
-            def check(m): return m.author == interaction.user and m.channel == self.ctx.channel
-            try:
-                msg = await bot.wait_for("message", check=check, timeout=30)
-                self.money = msg.content
-            except asyncio.TimeoutError:
-                await interaction.followup.send("⏰ Temps écoulé pour choisir la mise.", ephemeral=True)
-                return
-        else:
-            self.money = self.money_select.values[0]
-        await interaction.response.send_message(f"💸 Mise enregistrée : {self.money}€", ephemeral=True)
+        for member in team1:
+            await member.move_to(ch1)
+            await member.send(f"➡️ Tu joues dans **{match_data['mode']}**, mise : **{match_data['mise']}€**, format **{match_data['format']}**. Envoie **{match_data['mise']}€** à ce PayPal : {PAYPAL_LINK}")
+        for member in team2:
+            await member.move_to(ch2)
+            await member.send(f"➡️ Tu joues dans **{match_data['mode']}**, mise : **{match_data['mise']}€**, format **{match_data['format']}**. Envoie **{match_data['mise']}€** à ce PayPal : {PAYPAL_LINK}")
 
-    async def mode_callback(self, interaction):
-        if self.mode_select.values[0] == "custom":
-            await interaction.response.send_message("🎯 Envoie ton mode de jeu personnalisé", ephemeral=True)
+        result_msg = await ctx.send(
+            embed=discord.Embed(
+                title="🎮 Fin du match - Résultats",
+                description=f"L'équipe 1 : {', '.join(m.name for m in team1)}\nL'équipe 2 : {', '.join(m.name for m in team2)}",
+                color=discord.Color.blue()
+            ),
+            view=ResultView(team1, team2, match_data["mise"] * len(team1))
+        )
 
-            def check(m): return m.author == interaction.user and m.channel == self.ctx.channel
-            try:
-                msg = await bot.wait_for("message", check=check, timeout=30)
-                self.mode = msg.content
-            except asyncio.TimeoutError:
-                await interaction.followup.send("⏰ Temps écoulé pour choisir le mode.", ephemeral=True)
-                return
-        else:
-            self.mode = self.mode_select.values[0]
-        await interaction.response.send_message(f"🎮 Mode de jeu : {self.mode}", ephemeral=True)
+    await ctx.send("🔧 Création du match...")
+    await ctx.send("🧩 Configuration du match :", view=MatchConfig())
 
-    async def set_first_to_3(self, interaction):
-        self.first_to = "3+2"
-        await self.finish_setup(interaction)
-
-    async def set_first_to_5(self, interaction):
-        self.first_to = "5+2"
-        await self.finish_setup(interaction)
-
-    async def finish_setup(self, interaction):
-        if not self.money or not self.mode:
-            await interaction.response.send_message("❗ Tu dois d'abord choisir la mise et le mode.", ephemeral=True)
-            return
-
-        number = len(self.players)
-        random.shuffle(self.players)
-        mid = number // 2
-        team1 = self.players[:mid]
-        team2 = self.players[mid:]
-        self.match_data.update({"team1": team1, "team2": team2})
-
-        # Déplacement dans les vocaux
-        ch1 = self.ctx.guild.get_channel(VOCAL_TEAMS[number][0])
-        ch2 = self.ctx.guild.get_channel(VOCAL_TEAMS[number][1])
-        for m in team1:
-            await m.move_to(ch1)
-        for m in team2:
-            await m.move_to(ch2)
-
-        embed = discord.Embed(title="🎯 Match prêt !", description=f"Mise : {self.money}€\nMode : {self.mode}\nFormat : First to {self.first_to}", color=0x00ffcc)
-        embed.add_field(name="Équipe 1", value="\n".join(m.mention for m in team1))
-        embed.add_field(name="Équipe 2", value="\n".join(m.mention for m in team2))
-        await interaction.response.send_message(embed=embed)
-
-        await asyncio.sleep(10)  # temps d'attente avant envoi des boutons victoire/défaite
-        await self.ctx.send("🏁 Match terminé ? Cliquez sur votre résultat :", view=MatchResultView(self.match_id))
-
-class MatchResultView(View):
-    def __init__(self, match_id):
+class ResultView(View):
+    def __init__(self, team1, team2, gain):
         super().__init__(timeout=None)
-        self.match_id = match_id
+        self.team1 = team1
+        self.team2 = team2
+        self.gain = gain
         self.votes = {"team1": set(), "team2": set()}
-        self.timeout_task = bot.loop.create_task(self.result_timeout())
+        self.start_time = datetime.utcnow()
+        self.message = None
+        self.update_task.start()
 
-    async def result_timeout(self):
-        await asyncio.sleep(180)
-        match = matches.get(self.match_id)
-        if not match:
+    @tasks.loop(seconds=5)
+    async def update_task(self):
+        if self.message:
+            remaining = 180 - int((datetime.utcnow() - self.start_time).total_seconds())
+            if remaining <= 0:
+                await self.check_result()
+                self.update_task.cancel()
+            else:
+                await self.message.edit(content=f"⏳ Temps restant pour valider le résultat : {remaining}s")
+
+    async def check_result(self):
+        if len(self.votes["team1"]) == len(self.team1) and len(self.votes["team2"]) == len(self.team2):
+            await self.message.channel.send("✅ Résultat validé. GG à tous !")
+            for m in self.team1:
+                if m.id in self.votes["team1"]:
+                    await m.send(f"✅ Vous avez gagné {self.gain}€")
+            for m in self.team2:
+                if m.id in self.votes["team2"]:
+                    await m.send("❌ Vous avez perdu votre mise.")
             return
 
-        if len(self.votes["team1"]) > len(self.votes["team2"]):
-            winner = match["team1"]
-        elif len(self.votes["team2"]) > len(self.votes["team1"]):
-            winner = match["team2"]
-        else:
-            # cas litigeux — demander preuve
-            admin = await bot.fetch_user(ADMIN_ID)
-            await admin.send("⚠️ Conflit de résultat pour le match {}. Demande de preuve vidéo.")
-            return
-
-        admin = await bot.fetch_user(ADMIN_ID)
-        await admin.send(f"✅ L'équipe gagnante est : {' , '.join(p.name for p in winner)} — Match : {self.match_id}")
+        elif self.votes["team1"] and self.votes["team2"]:
+            await self.message.channel.send(
+                "⚠️ Conflit détecté. Veuillez déposer une preuve (vidéo, lien Streamable...) dans ce salon dans les 3 minutes."
+            )
 
     @discord.ui.button(label="Victoire", style=discord.ButtonStyle.success)
-    async def victory(self, interaction: discord.Interaction, button: Button):
-        match = matches.get(self.match_id)
-        user = interaction.user
-        if user in match["team1"]:
-            self.votes["team1"].add(user)
-        elif user in match["team2"]:
-            self.votes["team2"].add(user)
-        await interaction.response.send_message("✅ Vote enregistré", ephemeral=True)
+    async def victoire(self, interaction: discord.Interaction, button: Button):
+        if interaction.user in self.team1:
+            self.votes["team1"].add(interaction.user.id)
+        elif interaction.user in self.team2:
+            self.votes["team2"].add(interaction.user.id)
+        await interaction.response.send_message("🟢 Vote enregistré.", ephemeral=True)
 
     @discord.ui.button(label="Défaite", style=discord.ButtonStyle.danger)
-    async def defeat(self, interaction: discord.Interaction, button: Button):
-        match = matches.get(self.match_id)
-        user = interaction.user
-        if user in match["team1"]:
-            self.votes["team2"].add(user)
-        elif user in match["team2"]:
-            self.votes["team1"].add(user)
-        await interaction.response.send_message("😔 Défaite enregistrée", ephemeral=True)
+    async def defaite(self, interaction: discord.Interaction, button: Button):
+        if interaction.user in self.team1:
+            self.votes["team2"].add(interaction.user.id)
+        elif interaction.user in self.team2:
+            self.votes["team1"].add(interaction.user.id)
+        await interaction.response.send_message("🔴 Vote enregistré.", ephemeral=True)
 
-@bot.command()
-async def create(ctx, number: int):
-    if number not in VOCAL_TEAMS:
-        await ctx.send("❌ Seuls les formats 4, 6 ou 8 joueurs sont supportés.")
-        return
+@bot.event
+async def on_message(message):
+    if message.channel.id == MATCH_LOG_CHANNEL_ID and message.attachments:
+        admin = await bot.fetch_user(ADMIN_ID)
+        for file in message.attachments:
+            await admin.send(f"📩 Preuve reçue : {file.url}")
+    await bot.process_commands(message)
 
-    if not ctx.author.voice or not ctx.author.voice.channel:
-        await ctx.send("❌ Tu dois être dans un salon vocal avec les joueurs.")
-        return
-
-    voice_channel = ctx.author.voice.channel
-    members = [m for m in voice_channel.members if not m.bot]
-
-    if len(members) != number:
-        await ctx.send(f"❌ Il y a {len(members)} joueurs, mais tu as spécifié {number}.")
-        return
-
-    embed = discord.Embed(title="🎮 Création de match", description="Configure ta mise, ton mode et ton format.", color=0x00ffff)
-    embed.add_field(name="Participants", value="\n".join(m.mention for m in members))
-    await ctx.send(embed=embed, view=MatchSetup(ctx, members))
+@bot.event
+async def on_ready():
+    print(f"✅ Connecté en tant que {bot.user}")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
