@@ -19,6 +19,8 @@ MATCH_LOG_CHANNEL_ID = 123456789012345678  # Remplacer
 ADMIN_ID = 943177409933488139
 PAYPAL_LINK = "https://paypal.me/keitaaaonytb"
 
+user_stats = {}
+
 @bot.command()
 @commands.has_permissions(manage_messages=True)
 async def delete(ctx, amount: int):
@@ -28,6 +30,16 @@ async def delete(ctx, amount: int):
     await ctx.channel.purge(limit=amount + 1)
     confirmation = await ctx.send(f"✅ {amount} messages supprimés.")
     await confirmation.delete(delay=3)
+
+@bot.command()
+async def stats(ctx, user: discord.Member = None):
+    user = user or ctx.author
+    stats = user_stats.get(user.id, {"win": 0, "lose": 0})
+    win = stats["win"]
+    lose = stats["lose"]
+    total = win + lose
+    winrate = (win / total * 100) if total > 0 else 0
+    await ctx.send(f"📊 Stats de {user.display_name} :\n✅ Victoires : {win}\n❌ Défaites : {lose}\n🏅 Winrate : {winrate:.2f}%")
 
 @bot.command()
 async def create(ctx, nombre_joueurs: int):
@@ -201,6 +213,15 @@ class ResultView(View):
         self.update_task.cancel()
         await self.message.channel.send(f"🏆 {opponent.capitalize()} gagne par déclaration de défaite !")
 
+        for member in self.team1 + self.team2:
+            if member.id not in user_stats:
+                user_stats[member.id] = {"win": 0, "lose": 0}
+
+        for member in (self.team1 if opponent == "team1" else self.team2):
+            user_stats[member.id]["win"] += 1
+        for member in (self.team2 if opponent == "team1" else self.team1):
+            user_stats[member.id]["lose"] += 1
+
 @bot.event
 async def on_message(message):
     if message.channel.id == MATCH_LOG_CHANNEL_ID and message.attachments:
@@ -208,9 +229,9 @@ async def on_message(message):
         for file in message.attachments:
             await message.channel.send(f"📥 Preuve reçue de {message.author.mention}")
             view = View()
-            view.add_item(Button(label="✅ Équipe 1 gagnante", style=discord.ButtonStyle.success, custom_id="team1"))
-            view.add_item(Button(label="✅ Équipe 2 gagnante", style=discord.ButtonStyle.success, custom_id="team2"))
-            await admin.send(f"Preuve reçue de {message.author.name} : {file.url}", view=view)
+            view.add_item(Button(label="✅ Équipe 1 gagnante", style=discord.ButtonStyle.success, custom_id="team1_win"))
+            view.add_item(Button(label="✅ Équipe 2 gagnante", style=discord.ButtonStyle.success, custom_id="team2_win"))
+            await admin.send(f"📥 Preuve reçue de {message.author.name} : {file.url}", view=view)
     await bot.process_commands(message)
 
 @bot.event
