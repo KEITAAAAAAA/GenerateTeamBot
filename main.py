@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord.ui import View, Button, Modal, TextInput
 import random
 import os
 
@@ -21,6 +22,7 @@ class Match:
         self.amount = None
         self.mode = None
         self.format = None
+        self.results = {}
 
 @bot.event
 async def on_ready():
@@ -72,16 +74,6 @@ async def delete(ctx, amount: int):
     confirmation = await ctx.send(f"✅ {amount} messages supprimés.")
     await confirmation.delete(delay=3)
 
-from discord.ui import View, Button, Modal, TextInput
-
-class AmountView(View):
-    def __init__(self, match):
-        super().__init__()
-        self.match = match
-        for value in [1, 2, 5, 10]:
-            self.add_item(Button(label=f"{value}€", style=discord.ButtonStyle.primary, custom_id=f"amount_{value}"))
-        self.add_item(Button(label="Autre", style=discord.ButtonStyle.secondary, custom_id="amount_custom"))
-
 class CustomAmountModal(Modal, title="Mise personnalisée"):
     montant = TextInput(label="Entrez la mise (en euros)", required=True)
 
@@ -96,7 +88,6 @@ class CustomAmountModal(Modal, title="Mise personnalisée"):
                 await interaction.response.send_message("❌ Mise trop basse.", ephemeral=True)
                 return
             self.match.amount = value
-            await interaction.response.send_message(f"✅ Mise personnalisée : {value}€", ephemeral=True)
             await send_mode_selection(interaction, self.match)
         except:
             await interaction.response.send_message("❌ Valeur invalide.", ephemeral=True)
@@ -110,8 +101,37 @@ class CustomModeModal(Modal, title="Mode de jeu personnalisé"):
 
     async def on_submit(self, interaction: discord.Interaction):
         self.match.mode = self.mode.value
-        await interaction.response.send_message(f"✅ Mode : {self.match.mode}", ephemeral=True)
         await send_format_selection(interaction, self.match)
+
+class AmountView(View):
+    def __init__(self, match):
+        super().__init__(timeout=None)
+        self.match = match
+        for value in [1, 2, 5, 10]:
+            self.add_item(Button(label=f"{value}€", style=discord.ButtonStyle.primary, custom_id=f"amount_{value}"))
+        self.add_item(Button(label="Autre", style=discord.ButtonStyle.secondary, custom_id="amount_custom"))
+
+class ModeView(View):
+    def __init__(self, match):
+        super().__init__(timeout=None)
+        self.match = match
+        for mode in ["Realistic", "Zone Wars", "Boxfight"]:
+            self.add_item(Button(label=mode, style=discord.ButtonStyle.primary, custom_id=f"mode_{mode.lower()}"))
+        self.add_item(Button(label="Autre", style=discord.ButtonStyle.secondary, custom_id="mode_custom"))
+
+class FormatView(View):
+    def __init__(self, match):
+        super().__init__(timeout=None)
+        self.match = match
+        self.add_item(Button(label="First to 3 +2", style=discord.ButtonStyle.success, custom_id="format_3"))
+        self.add_item(Button(label="First to 5 +2", style=discord.ButtonStyle.success, custom_id="format_5"))
+
+class ResultView(View):
+    def __init__(self, match):
+        super().__init__(timeout=None)
+        self.match = match
+        self.add_item(Button(label="✅ Victoire", style=discord.ButtonStyle.green, custom_id="win"))
+        self.add_item(Button(label="❌ Défaite", style=discord.ButtonStyle.red, custom_id="lose"))
 
 @bot.command()
 async def create(ctx):
@@ -130,25 +150,10 @@ async def create(ctx):
     await ctx.send(embed=embed, view=AmountView(match))
 
 async def send_mode_selection(interaction, match):
-    view = View()
-    for label in ["Realistic", "Zone Wars", "Boxfight"]:
-        view.add_item(Button(label=label, style=discord.ButtonStyle.primary, custom_id=f"mode_{label.lower()}"))
-    view.add_item(Button(label="Autre", style=discord.ButtonStyle.secondary, custom_id="mode_custom"))
-    await interaction.followup.send("Choisissez un mode de jeu :", view=view)
+    await interaction.response.send_message("Choisissez un mode de jeu :", view=ModeView(match), ephemeral=True)
 
 async def send_format_selection(interaction, match):
-    view = View()
-    view.add_item(Button(label="First to 3 +2", style=discord.ButtonStyle.success, custom_id="format_3"))
-    view.add_item(Button(label="First to 5 +2", style=discord.ButtonStyle.success, custom_id="format_5"))
-    await interaction.followup.send("Choisissez un format :", view=view)
-
-async def send_result_buttons(ctx, match):
-    class ResultView(View):
-        def __init__(self):
-            super().__init__()
-            self.add_item(Button(label="✅ Victoire", style=discord.ButtonStyle.green, custom_id="win"))
-            self.add_item(Button(label="❌ Défaite", style=discord.ButtonStyle.red, custom_id="lose"))
-    await ctx.send("Match créé. Cliquez sur le résultat final :", view=ResultView())
+    await interaction.response.send_message("Choisissez un format :", view=FormatView(match), ephemeral=True)
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
@@ -157,6 +162,7 @@ async def on_interaction(interaction: discord.Interaction):
 
     match = matches.get(interaction.channel.id)
     if not match:
+        await interaction.response.send_message("Aucun match trouvé.", ephemeral=True)
         return
 
     custom_id = interaction.data['custom_id']
@@ -166,20 +172,18 @@ async def on_interaction(interaction: discord.Interaction):
             await interaction.response.send_modal(CustomAmountModal(match))
         else:
             match.amount = int(custom_id.split("_")[1])
-            await interaction.response.send_message(f"✅ Mise : {match.amount}€", ephemeral=True)
             await send_mode_selection(interaction, match)
 
     elif custom_id.startswith("mode_"):
         if custom_id == "mode_custom":
             await interaction.response.send_modal(CustomModeModal(match))
         else:
-            match.mode = custom_id.split("_")[1]
-            await interaction.response.send_message(f"✅ Mode : {match.mode}", ephemeral=True)
+            match.mode = custom_id.split("_")[1].capitalize()
             await send_format_selection(interaction, match)
 
     elif custom_id.startswith("format_"):
         match.format = custom_id.split("_")[1]
-        await interaction.response.send_message(f"✅ Format : First to {match.format} +2", ephemeral=True)
+        await interaction.response.send_message(f"✅ Format : First to {match.format} +2")
         for player in match.players:
             try:
                 await player.send(
@@ -187,7 +191,19 @@ async def on_interaction(interaction: discord.Interaction):
                 )
             except:
                 pass
-        await match.ctx.send("✅ Match créé et infos envoyées aux joueurs.")
-        await send_result_buttons(match.ctx, match)
+        await match.ctx.send("✅ Match créé et infos envoyées aux joueurs.", view=ResultView(match))
+
+    elif custom_id in ["win", "lose"]:
+        match.results[interaction.user.id] = custom_id
+        await interaction.response.send_message("Résultat enregistré ✅", ephemeral=True)
+
+        if len(match.results) >= len(match.players):
+            winners = [uid for uid, res in match.results.items() if res == "win"]
+            losers = [uid for uid, res in match.results.items() if res == "lose"]
+            winner_mentions = ", ".join(f"<@{uid}>" for uid in winners)
+            loser_mentions = ", ".join(f"<@{uid}>" for uid in losers)
+
+            total = match.amount * len(losers)
+            await match.ctx.send(f"💰 {winner_mentions} gagnent {total}€ de la part de {loser_mentions}.")
 
 bot.run(os.getenv("DISCORD_TOKEN"))
