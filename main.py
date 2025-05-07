@@ -150,6 +150,7 @@ class ResultView(View):
         self.start_time = None
         self.message = None
         self.update_task.start()
+        self.proofs = []
 
     def generate_embed(self):
         remaining = max(0, 180 - int((datetime.utcnow() - self.start_time).total_seconds())) if self.timer_started else "Pas commencé"
@@ -166,16 +167,13 @@ class ResultView(View):
     @tasks.loop(seconds=5)
     async def update_task(self):
         if self.message and self.timer_started:
-            if (datetime.utcnow() - self.start_time).total_seconds() >= 180:
-                await self.check_result()
+            elapsed = (datetime.utcnow() - self.start_time).total_seconds()
+            if elapsed >= 180:
+                await self.message.channel.send("⏰ Le chronomètre est terminé.")
+                await self.message.channel.send("⚠️ Conflit détecté. Veuillez déposer une preuve (vidéo/lien Streamable...) dans ce salon dans les 3 minutes.")
                 self.update_task.cancel()
             else:
                 await self.message.edit(embed=self.generate_embed())
-
-    async def check_result(self):
-        await self.message.channel.send(
-            "⚠️ Conflit détecté. Veuillez déposer une preuve (vidéo/lien Streamable...) dans ce salon dans les 3 minutes."
-        )
 
     @discord.ui.button(label="Victoire", style=discord.ButtonStyle.success)
     async def victoire(self, interaction: discord.Interaction, button: Button):
@@ -183,10 +181,8 @@ class ResultView(View):
             self.start_time = datetime.utcnow()
             self.timer_started = True
 
-        if interaction.user in self.team1:
-            self.votes["team1"][interaction.user.id] = "win"
-        elif interaction.user in self.team2:
-            self.votes["team2"][interaction.user.id] = "win"
+        team = "team1" if interaction.user in self.team1 else "team2"
+        self.votes[team][interaction.user.id] = "win"
         await interaction.response.send_message("🟢 Vote enregistré.", ephemeral=True)
         await self.message.edit(embed=self.generate_embed())
 
@@ -196,30 +192,25 @@ class ResultView(View):
             self.start_time = datetime.utcnow()
             self.timer_started = True
 
-        if interaction.user in self.team1:
-            self.votes["team1"][interaction.user.id] = "lose"
-        elif interaction.user in self.team2:
-            self.votes["team2"][interaction.user.id] = "lose"
+        team = "team1" if interaction.user in self.team1 else "team2"
+        opponent = "team2" if team == "team1" else "team1"
+        self.votes[team][interaction.user.id] = "lose"
 
         await interaction.response.send_message("🔴 Vote enregistré.", ephemeral=True)
         await self.message.edit(embed=self.generate_embed())
-
-        # Check for instant resolution
-        team1_votes = list(self.votes["team1"].values())
-        team2_votes = list(self.votes["team2"].values())
-        if "lose" in team1_votes:
-            await self.message.channel.send("🏆 Équipe 2 gagne par déclaration de défaite !")
-            self.update_task.cancel()
-        elif "lose" in team2_votes:
-            await self.message.channel.send("🏆 Équipe 1 gagne par déclaration de défaite !")
-            self.update_task.cancel()
+        self.update_task.cancel()
+        await self.message.channel.send(f"🏆 {opponent.capitalize()} gagne par déclaration de défaite !")
 
 @bot.event
 async def on_message(message):
     if message.channel.id == MATCH_LOG_CHANNEL_ID and message.attachments:
         admin = await bot.fetch_user(ADMIN_ID)
         for file in message.attachments:
-            await admin.send(f"📩 Preuve reçue : {file.url}")
+            await message.channel.send(f"📥 Preuve reçue de {message.author.mention}")
+            view = View()
+            view.add_item(Button(label="✅ Équipe 1 gagnante", style=discord.ButtonStyle.success, custom_id="team1"))
+            view.add_item(Button(label="✅ Équipe 2 gagnante", style=discord.ButtonStyle.success, custom_id="team2"))
+            await admin.send(f"Preuve reçue de {message.author.name} : {file.url}", view=view)
     await bot.process_commands(message)
 
 @bot.event
