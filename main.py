@@ -24,7 +24,7 @@ RANKS = [
 
 MATCH_LOG_CHANNEL_ID = 123456789012345678  # Remplacer
 ADMIN_ID = 943177409933488139
-PAYPAL_LINK = "https://paypal.me/tonlien"
+PAYPAL_LINK = "https://paypal.me/keitaaaonytb"
 
 user_stats = {}  # {user_id: {win: int, lose: int, progress: int}}
 matches_in_progress = {}
@@ -170,7 +170,7 @@ async def create(ctx, nombre_joueurs: int):
         matches_in_progress[result_msg.id] = {"team1": team1, "team2": team2, "channel": ctx.channel}
 
     await ctx.send("🔧 Création du match...")
-    await ctx.send("🧩 Configuration du match :", view=MatchConfig())
+    await ctx.send("🧹 Configuration du match :", view=MatchConfig())
 
 def get_rank_role_id(wins):
     for role_id, _, threshold in RANKS:
