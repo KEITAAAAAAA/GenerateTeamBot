@@ -63,6 +63,13 @@ async def rank(ctx, user: discord.Member = None):
 async def reset_stats(ctx, user: discord.Member = None):
     user = user or ctx.author
     user_stats[user.id] = {"win": 0, "lose": 0, "progress": 0}
+    for role_id, _, _ in RANKS:
+        role = ctx.guild.get_role(role_id)
+        if role in user.roles:
+            await user.remove_roles(role)
+    default_rank = ctx.guild.get_role(RANKS[-1][0])
+    if default_rank:
+        await user.add_roles(default_rank, reason="Reset des stats et du rang")
     await ctx.send(f"🔁 Stats et rank de {user.display_name} ont été réinitialisés.")
 
 @bot.command()
